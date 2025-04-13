@@ -28,7 +28,7 @@ function Silent-Ping {
 
 Silent-Ping
 
-$ports = @(21, 22, 53, 80, 443, 3389)
+$ports = @(1..3400)
 foreach ($port in $ports) {
     $tcp = New-Object System.Net.Sockets.TcpClient
     try {
