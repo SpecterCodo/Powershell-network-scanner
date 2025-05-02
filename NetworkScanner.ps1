@@ -4,59 +4,64 @@ param (
 )
 
 function Random-Delay {
-    $delay = Get-Random -Minimum 3 -Maximum 10
-    Start-Sleep -Seconds $delay
+    Start-Sleep -Seconds (Get-Random -Minimum 3 -Maximum 10)
 }
 
-# Resolve target to IPv4 address
-$dnsInfo = Resolve-DnsName -Name $target -ErrorAction SilentlyContinue
-$ipAddress = ($dnsInfo | Where-Object { $_.IPAddress -match '^\d{1,3}(\.\d{1,3}){3}$' }).IPAddress
-
-if (-not $ipAddress) {
-    Write-Output "❌ Unable to resolve a valid IPv4 address for $target"
+# Resolve DNS
+try {
+    $ipAddress = [System.Net.Dns]::GetHostAddresses($target) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | Select-Object -First 1
+    if (-not $ipAddress) { throw "No IPv4 address found" }
+    Write-Output "✅ Target IP for ${target}: $ipAddress"
+} catch {
+    Write-Output "❌ Failed to resolve $target"
     exit
-} else {
-    Write-Output "✅ IP Address of $target: $ipAddress"
 }
 
-# Check if host is online
-function Silent-Ping {
-    try {
-        $response = Invoke-WebRequest -Uri "http://$target" -Method Head -TimeoutSec 5 -UseBasicParsing
-        Write-Output "✅ $target is ONLINE"
-    } catch {
-        Write-Output "⚠️ $target appears OFFLINE"
-    }
-}
+# Ports 1-1200 + 3389
+$ports = @(1..1200) + 3389
 
-Silent-Ping
+# Reliable TCP port test
+function Test-Port {
+    param (
+        [string]$ip,
+        [int]$port,
+        [int]$timeout = 1000
+    )
 
-# Port scan with timeout and optional delay
-$ports = @(1..1400 + 3389)
-foreach ($port in $ports) {
-    $tcp = New-Object System.Net.Sockets.TcpClient
-    $async = $tcp.BeginConnect($ipAddress, $port, $null, $null)
-    $success = $async.AsyncWaitHandle.WaitOne(1000, $false)  # 1-second timeout
+    $client = New-Object System.Net.Sockets.TcpClient
+    $async = $client.BeginConnect($ip, $port, $null, $null)
+    $success = $async.AsyncWaitHandle.WaitOne($timeout, $false)
 
-    if ($success -and $tcp.Connected) {
-        Write-Output "🟢 Port $port is OPEN on $target"
+    if ($success -and $client.Connected) {
+        $client.EndConnect($async)
+        $client.Close()
+        return $true
     } else {
-        Write-Output "🔴 Port $port is CLOSED on $target"
+        $client.Close()
+        return $false
     }
+}
 
-    $tcp.Close()
+Write-Output "`n🔍 Starting port scan on ${target}..."
+foreach ($port in $ports) {
+    $isOpen = Test-Port -ip $ipAddress.IPAddressToString -port $port
+    if ($isOpen) {
+        Write-Output "🟢 Port $port is OPEN"
+    } else {
+        Write-Output "🔴 Port $port is closed"
+    }
 
     if ($stealth) {
         Random-Delay
     }
 }
 
-# Geolocation lookup
-$response = Invoke-RestMethod -Uri "http://ip-api.com/json/$ipAddress" -ErrorAction SilentlyContinue
+# Geolocation info
+$response = Invoke-RestMethod -Uri "http://ip-api.com/json/$($ipAddress.IPAddressToString)" -ErrorAction SilentlyContinue
 if ($response -and $response.status -eq "success") {
-    Write-Output "🌍 Location: $($response.city), $($response.country) | ISP: $($response.isp)"
+    Write-Output "`n🌍 Location: $($response.city), $($response.country) | ISP: $($response.isp)"
 } else {
-    Write-Output "⚠️ Geolocation lookup failed or was rate-limited"
+    Write-Output "⚠️ GeoIP lookup failed"
 }
 
-Write-Output "✅ Scan Completed"
+Write-Output "`n✅ Scan completed."
